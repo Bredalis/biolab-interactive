@@ -598,14 +598,158 @@ function showOrganelle(organelleKey) {
 }
 
 // ============================================
+// PERSISTENT PRODUCT STATE
+// ============================================
+const STORAGE_KEY = 'biolab-interactive-state-v3';
+const ANALYTICS_CODE = window.BIOLAB_ANALYTICS_CODE || '';
+
+let productState = {
+  xp: 0,
+  streak: 0,
+  lastActiveDate: null,
+  dailyCompletedDate: null,
+  quizzesCompleted: 0,
+  quizCorrect: 0,
+  explored: [],
+  builderCompleted: false,
+  missionsCompleted: [],
+  missionAttempts: {}
+};
+
+function loadProductState() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+    if (saved && typeof saved === 'object') productState = { ...productState, ...saved };
+  } catch (error) {
+    console.warn('BioLab: no se pudo cargar el progreso local.', error);
+  }
+}
+
+function saveProductState() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(productState)); } catch (_) {}
+}
+
+function todayKey() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function registerActivity() {
+  const today = todayKey();
+  if (productState.lastActiveDate !== today) {
+    const previous = productState.lastActiveDate;
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayKey = yesterday.toISOString().slice(0, 10);
+    productState.streak = previous === yesterdayKey ? productState.streak + 1 : 1;
+    productState.lastActiveDate = today;
+    saveProductState();
+  }
+}
+
+function awardXP(amount, reason) {
+  productState.xp += amount;
+  registerActivity();
+  saveProductState();
+  updateDashboard();
+  trackEvent('xp_earned', { amount, reason });
+}
+
+function trackEvent(name, data = {}) {
+  // If GoatCounter is configured, it gives you aggregate visitor/event analytics
+  // without requiring user accounts in BioLab.
+  if (window.goatcounter && typeof window.goatcounter.count === 'function') {
+    window.goatcounter.count({ path: `event/${name}`, title: name });
+  }
+  // Keep a tiny local event counter as a fallback for debugging.
+  try {
+    const key = 'biolab-event-counts';
+    const events = JSON.parse(localStorage.getItem(key) || '{}');
+    events[name] = (events[name] || 0) + 1;
+    localStorage.setItem(key, JSON.stringify(events));
+  } catch (_) {}
+}
+
+function loadAnalytics() {
+  if (!ANALYTICS_CODE || ANALYTICS_CODE === 'YOUR_GOATCOUNTER_CODE') return;
+  if (document.querySelector('script[data-biolab-analytics]')) return;
+  const script = document.createElement('script');
+  script.dataset.biolabAnalytics = 'true';
+  script.src = 'https://gc.zgo.at/count.js';
+  script.async = true;
+  script.dataset.goatcounter = `https://${ANALYTICS_CODE}.goatcounter.com/count`;
+  document.head.appendChild(script);
+}
+
+function updateDashboard() {
+  const statXP = document.getElementById('stat-xp');
+  const statStreak = document.getElementById('stat-streak');
+  const statQuizzes = document.getElementById('stat-quizzes');
+  const statExplored = document.getElementById('stat-explored');
+  if (statXP) statXP.textContent = productState.xp;
+  if (statStreak) statStreak.textContent = productState.streak;
+  if (statQuizzes) statQuizzes.textContent = productState.quizzesCompleted;
+  if (statExplored) statExplored.textContent = productState.explored.length;
+
+  const dailyTitle = document.getElementById('daily-title');
+  const dailySubtitle = document.getElementById('daily-subtitle');
+  const dailyBtn = document.querySelector('.daily-btn');
+  if (dailyTitle && dailySubtitle && dailyBtn) {
+    const completed = productState.dailyCompletedDate === todayKey();
+    const dailyQuestion = getDailyQuestion();
+    dailyTitle.textContent = completed ? '¡Reto diario completado! ✨' : dailyQuestion.question;
+    dailySubtitle.textContent = completed
+      ? 'Vuelve mañana para desbloquear una nueva misión.'
+      : 'Una pregunta rápida. Completa el reto y gana XP.';
+    dailyBtn.textContent = completed ? 'Repasar →' : 'Comenzar →';
+    dailyBtn.classList.toggle('daily-complete', completed);
+  }
+}
+
+function getDailyQuestion() {
+  const date = todayKey();
+  const hash = [...date].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return quizQuestions[hash % quizQuestions.length];
+}
+
+function startDailyChallenge() {
+  const q = getDailyQuestion();
+  const index = quizQuestions.findIndex(item => item.id === q.id);
+  quizState.shuffledQuestions = [q];
+  quizState.filteredQuestions = [q];
+  quizState.currentIndex = 0;
+  quizState.score = 0;
+  quizState.streak = 0;
+  quizState.answered = false;
+  setMode('quiz');
+  trackEvent('daily_challenge_started', { question: q.id });
+}
+
+function completeDailyChallenge() {
+  const today = todayKey();
+  if (productState.dailyCompletedDate !== today) {
+    productState.dailyCompletedDate = today;
+    awardXP(25, 'daily_challenge');
+    updateDashboard();
+    trackEvent('daily_challenge_completed');
+  }
+}
+
+loadProductState();
+
+// ============================================
 // STATE
 // ============================================
 let currentMode = 'explorer';
-let exploredOrganelles = new Set();
+let exploredOrganelles = new Set(productState.explored || []);
 let quizState = {
   currentIndex: 0,
   score: 0,
   streak: 0,
+  correct: 0,
   answered: false,
   filter: 'all',
   filteredQuestions: [],
@@ -618,9 +762,128 @@ let cellType = 'animal';
 // INIT
 // ============================================
 document.addEventListener('DOMContentLoaded', () => {
+  loadAnalytics();
+  registerActivity();
   initQuiz();
   updateProgress();
+  updateDashboard();
+  renderMissions();
+  trackEvent('app_open');
 });
+
+// ============================================
+// SCIENTIFIC MISSIONS
+// ============================================
+const missions = [
+  {
+    id: 'energy-crisis', icon: '⚡', difficulty: 'Nivel 1', xp: 40,
+    title: 'Crisis energética',
+    summary: 'Una célula deja de producir suficiente ATP. Investiga qué estructura está fallando.',
+    scenario: 'Tus sensores detectan una caída brusca de ATP. La síntesis de proteínas y el transporte activo comienzan a disminuir. ¿Qué estructura investigarías primero?',
+    choices: [
+      { text: '🧠 Núcleo', correct: false, feedback: 'El núcleo contiene el ADN y regula la expresión génica, pero no es el sitio principal de producción de ATP.' },
+      { text: '⚡ Mitocondria', correct: true, feedback: 'Correcto. La mitocondria genera gran parte del ATP mediante la respiración celular.' },
+      { text: '📦 Aparato de Golgi', correct: false, feedback: 'El Golgi modifica y distribuye moléculas; no es el principal productor de ATP.' }
+    ]
+  },
+  {
+    id: 'protein-factory', icon: '🧬', difficulty: 'Nivel 2', xp: 50,
+    title: 'Fábrica de proteínas',
+    summary: 'Una célula secretora produce muchas proteínas, pero los productos no llegan a su destino.',
+    scenario: 'Una célula pancreática fabrica una proteína para secretarla fuera de la célula. La proteína se sintetiza, pero el envío falla. ¿Qué ruta deberías revisar?',
+    choices: [
+      { text: '🧬 Ribosoma → RER → Golgi → vesícula', correct: true, feedback: 'Exacto. Los ribosomas sintetizan la proteína, el RER participa en su procesamiento inicial y el Golgi la modifica y clasifica para su destino.' },
+      { text: '⚡ Mitocondria → núcleo → membrana', correct: false, feedback: 'La mitocondria no es la ruta de empaquetado y secreción de proteínas.' },
+      { text: '🌿 Cloroplasto → vacuola → Golgi', correct: false, feedback: 'Esa secuencia no corresponde a la vía secretora de una célula animal.' }
+    ]
+  },
+  {
+    id: 'membrane-defense', icon: '🛡️', difficulty: 'Nivel 3', xp: 60,
+    title: 'Defensa de la membrana',
+    summary: 'Una sustancia atraviesa la membrana. Determina qué mecanismo explica mejor su movimiento.',
+    scenario: 'Hay mucha más concentración de una molécula pequeña y no polar fuera de la célula que dentro. No se observa gasto de ATP. ¿Cómo esperarías que se mueva?',
+    choices: [
+      { text: '🚪 Difusión simple hacia el interior', correct: true, feedback: 'Correcto. Una molécula pequeña y no polar puede atravesar la bicapa lipídica siguiendo su gradiente de concentración sin ATP.' },
+      { text: '🔋 Transporte activo hacia el interior', correct: false, feedback: 'El transporte activo requiere energía y normalmente se utiliza para mover sustancias contra su gradiente.' },
+      { text: '📦 Exocitosis', correct: false, feedback: 'La exocitosis utiliza vesículas para sacar materiales de la célula; no describe este caso.' }
+    ]
+  }
+];
+
+let activeMission = null;
+let activeMissionAnswered = false;
+
+function renderMissions() {
+  const grid = document.getElementById('mission-grid');
+  const pill = document.getElementById('mission-progress-pill');
+  if (!grid) return;
+  const completed = productState.missionsCompleted || [];
+  if (pill) pill.textContent = `${completed.length}/${missions.length} completadas`;
+  grid.innerHTML = missions.map(m => {
+    const done = completed.includes(m.id);
+    return `<article class="mission-card ${done ? 'completed' : ''}">
+      <div class="mission-icon">${m.icon}</div>
+      <h3>${m.title}</h3>
+      <p>${m.summary}</p>
+      <div class="mission-meta"><span>🧪 ${m.difficulty}</span><span>⚡ +${m.xp} XP</span></div>
+      <button class="mission-open" onclick="openMission('${m.id}')">${done ? '↻ Repetir misión' : 'Iniciar misión →'}</button>
+    </article>`;
+  }).join('');
+}
+
+function openMission(id) {
+  const mission = missions.find(m => m.id === id);
+  if (!mission) return;
+  activeMission = mission;
+  activeMissionAnswered = false;
+  document.getElementById('mission-grid').hidden = true;
+  document.querySelector('.missions-hero').hidden = true;
+  const workspace = document.getElementById('mission-workspace');
+  workspace.hidden = false;
+  const content = document.getElementById('mission-content');
+  content.innerHTML = `<div class="mission-case">
+    <div class="mission-case-header"><span class="eyebrow">🧪 MISIÓN CIENTÍFICA · ${mission.difficulty.toUpperCase()}</span><h2>${mission.icon} ${mission.title}</h2><p>Resuelve el caso con evidencia biológica.</p></div>
+    <div class="mission-scenario"><h3>🔬 Caso</h3><p>${mission.scenario}</p></div>
+    <div class="mission-decision"><h3>🧠 Toma una decisión</h3><div class="mission-choices">${mission.choices.map((c,i)=>`<button class="mission-choice" onclick="answerMission(${i})">${c.text}</button>`).join('')}</div><div class="mission-feedback" id="mission-feedback" hidden></div></div>
+  </div>`;
+  productState.missionAttempts[id] = (productState.missionAttempts[id] || 0) + 1;
+  saveProductState();
+  trackEvent('mission_started', { mission: id });
+}
+
+function answerMission(index) {
+  if (!activeMission || activeMissionAnswered) return;
+  const choice = activeMission.choices[index];
+  const buttons = document.querySelectorAll('.mission-choice');
+  buttons.forEach((b,i) => { b.disabled = true; if (i === index) b.classList.add(choice.correct ? 'correct' : 'incorrect'); if (activeMission.choices[i].correct) b.classList.add('correct'); });
+  const feedback = document.getElementById('mission-feedback');
+  feedback.hidden = false;
+  feedback.innerHTML = `${choice.correct ? '✅' : '🧭'} <strong>${choice.correct ? 'Decisión correcta.' : 'Todavía no.'}</strong> ${choice.feedback}`;
+  if (choice.correct) {
+    activeMissionAnswered = true;
+    const already = (productState.missionsCompleted || []).includes(activeMission.id);
+    if (!already) {
+      productState.missionsCompleted.push(activeMission.id);
+      awardXP(activeMission.xp, `mission_${activeMission.id}`);
+    } else {
+      awardXP(10, 'mission_replay');
+    }
+    trackEvent('mission_completed', { mission: activeMission.id });
+    setTimeout(() => renderMissions(), 0);
+    feedback.innerHTML += `<div style="margin-top:12px;font-weight:800;color:var(--primary-dark)">🏆 +${already ? 10 : activeMission.xp} XP · Misión completada</div>`;
+  } else {
+    trackEvent('mission_wrong_choice', { mission: activeMission.id });
+    buttons.forEach(b => b.disabled = false);
+  }
+}
+
+function closeMission() {
+  activeMission = null;
+  document.getElementById('mission-workspace').hidden = true;
+  document.getElementById('mission-grid').hidden = false;
+  document.querySelector('.missions-hero').hidden = false;
+  renderMissions();
+}
 
 // ============================================
 // MODE SWITCHING
@@ -642,6 +905,9 @@ function setMode(mode) {
   if (mode === 'quiz') {
     renderQuizQuestion();
   }
+  if (mode === 'missions') {
+    renderMissions();
+  }
 }
 
 // ============================================
@@ -651,7 +917,10 @@ function showInfo(key) {
   const data = organelleData[key];
   if (!data) return;
 
+  const wasNew = !exploredOrganelles.has(key);
   exploredOrganelles.add(key);
+  productState.explored = [...exploredOrganelles];
+  if (wasNew) awardXP(5, 'explore_organelle'); else saveProductState();
   updateProgress();
 
   const panel = document.getElementById('info-panel');
@@ -723,6 +992,7 @@ function initQuiz() {
   quizState.currentIndex = 0;
   quizState.score = 0;
   quizState.streak = 0;
+  quizState.correct = 0;
 }
 
 function filterQuiz(category) {
@@ -751,6 +1021,7 @@ function filterQuiz(category) {
   quizState.currentIndex = 0;
   quizState.score = 0;
   quizState.streak = 0;
+  quizState.correct = 0;
   quizState.answered = false;
 
   renderQuizQuestion();
@@ -812,6 +1083,7 @@ function selectAnswer(index) {
   });
 
   if (index === q.correct) {
+    quizState.correct++;
     quizState.score += 10 + (quizState.streak * 2);
     quizState.streak++;
     feedback.innerHTML = `✅ ¡Correcto! ${q.explanation}`;
@@ -842,8 +1114,15 @@ function skipQuestion() {
 
 function showQuizResults() {
   const total = quizState.filteredQuestions.length;
-  const maxScore = total * 10;
-  const percent = Math.round((quizState.score / maxScore) * 100);
+  const percent = total ? Math.round((quizState.correct / total) * 100) : 0;
+  productState.quizzesCompleted++;
+  productState.quizCorrect += quizState.correct;
+  awardXP(Math.max(10, quizState.correct * 5), 'quiz_completed');
+  if (quizState.filteredQuestions.length === 1 && quizState.filteredQuestions[0].id === getDailyQuestion().id) {
+    completeDailyChallenge();
+  }
+  saveProductState();
+  trackEvent('quiz_completed', { correct: quizState.correct, total, percent });
 
   let icon, title, message, badges = [];
 
@@ -1148,6 +1427,11 @@ function addToCell(part) {
 
   if (builderParts.length === 8) {
     canvas.classList.add('complete');
+    if (!productState.builderCompleted) {
+      productState.builderCompleted = true;
+      awardXP(50, 'builder_completed');
+      trackEvent('builder_completed');
+    }
     document.getElementById('builder-completion').innerHTML = `
       <div class="completion-badge">🏆 ¡Célula completa! Eres una científica estrella 🌟</div>
     `;
@@ -1203,3 +1487,5 @@ document.addEventListener('click', (e) => {
     modal.classList.remove('active');
   }
 });
+
+window.addEventListener('beforeunload', saveProductState);

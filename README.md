@@ -146,6 +146,43 @@ biolab-interactive/
 
 ---
 
+
+## ✨ Product update: retention + analytics
+
+BioLab now includes a lightweight product layer designed for repeat usage while keeping the learning experience free:
+
+- 🧬 **Daily Challenge** — one deterministic challenge per day.
+- ⚡ **Persistent XP** — progress survives page reloads via `localStorage`.
+- 🔥 **Learning streak** — tracks consecutive active days locally.
+- 🏆 **Quiz history** — records completed quizzes and correct answers locally.
+- 🔬 **Explorer rewards** — first-time organelle discoveries grant XP.
+- 🏗️ **Builder reward** — completing the cell grants XP once.
+- 📊 **Analytics-ready integration** — optional GoatCounter support for aggregate visitor/pageview and event measurement.
+- 🔐 **No account required** — the learning progress is stored locally in the browser.
+
+### Measuring visitors
+
+The app is prepared for [GoatCounter](https://www.goatcounter.com/), an open-source, privacy-friendly analytics service that currently offers a free hosted service for reasonable public usage. It can report pageviews and unique visits without requiring persistent user identifiers. 
+
+1. Create a GoatCounter site.
+2. Copy the site code from your GoatCounter address. For example, if the dashboard is `YOURCODE.goatcounter.com`, the code is `YOURCODE`.
+3. In `index.html`, change:
+
+```html
+<script>window.BIOLAB_ANALYTICS_CODE = "";</script>
+```
+
+to:
+
+```html
+<script>window.BIOLAB_ANALYTICS_CODE = "YOURCODE";</script>
+```
+
+The application will then load GoatCounter and record pageviews plus selected product events. The visitor statistics are available in the GoatCounter dashboard.
+
+The analytics integration is optional: BioLab works normally when the code is left blank.
+
+
 ## 🤝 Contributing
 
 Contributions are welcome! If you find a bug or have an idea:
@@ -196,3 +233,20 @@ Made with love for biology students around the world. 🌸
 
 Add these to your repository's "Topics" section:
 `biology`, `education`, `interactive`, `svg`, `javascript`, `cell-biology`, `organelles`, `quiz`, `learning`, `html5`, `css3`, `science`, `students`, `elearning`, `biology-education`
+
+
+## 🧪 Product features
+
+The current version includes a lightweight retention loop designed to keep BioLab free and accountless:
+
+- 🧬 Daily Challenge
+- ⚡ Persistent XP and learning streak
+- 🏆 Quiz and exploration progress
+- 🧪 Scientific Missions with decision-based cases
+- 💾 Local progress persistence with `localStorage`
+- 📊 Optional privacy-friendly GoatCounter analytics
+- 📱 Responsive interface for mobile and desktop
+
+### Product direction
+
+BioLab is evolving from an interactive reference into a small learning game: **Explore → Decide → Practice → Earn XP → Return**.
